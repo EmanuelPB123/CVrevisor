@@ -1,0 +1,344 @@
+<html><head><base href="https://websim.io/cv-manager/">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gestor de CVs - Buscador y Clasificador Automático de PDF</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f0f0;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  .container {
+    background-color: white;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    max-width: 800px;
+    width: 100%;
+  }
+  h1, h2 {
+    color: #2c3e50;
+    text-align: center;
+  }
+  input[type="file"], textarea {
+    display: block;
+    width: 100%;
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 16px;
+  }
+  textarea {
+    height: 100px;
+    resize: vertical;
+  }
+  #results, #stored-cvs {
+    margin-top: 20px;
+    border-top: 1px solid #ddd;
+    padding-top: 20px;
+  }
+  .progress-bar {
+    width: 100%;
+    background-color: #e0e0e0;
+    padding: 3px;
+    border-radius: 3px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
+    margin-bottom: 20px;
+  }
+  .progress-bar-fill {
+    display: block;
+    height: 22px;
+    background-color: #659cef;
+    border-radius: 3px;
+    transition: width 500ms ease-in-out;
+  }
+  .good {
+    color: green;
+    font-weight: bold;
+  }
+  .bad {
+    color: red;
+    font-weight: bold;
+  }
+  .revisado {
+    color: orange;
+    font-weight: bold;
+  }
+  .config-section {
+    margin-bottom: 20px;
+    padding: 10px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+  }
+  button {
+    background-color: #4CAF50;
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+  button.delete {
+    background-color: #f44336;
+  }
+  button.edit {
+    background-color: #FFA500;
+  }
+  .cv-item {
+    background-color: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 10px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>Gestor de CVs - Buscador y Clasificador Automático de PDF</h1>
+    
+    <div class="config-section">
+      <h2>Configuración</h2>
+      <textarea id="default-names" placeholder="Nombres a buscar (uno por línea)"></textarea>
+      <textarea id="good-words" placeholder="Palabras para clasificar como 'bueno' (una por línea)"></textarea>
+      <textarea id="bad-words" placeholder="Palabras para clasificar como 'malo' (una por línea)"></textarea>
+      <button id="save-config">Guardar Configuración</button>
+    </div>
+    
+    <input type="file" id="file-input" accept=".pdf" multiple>
+    <div class="progress-bar">
+      <span class="progress-bar-fill" style="width: 0%;"></span>
+    </div>
+    <div id="results"></div>
+    
+    <h2>CVs Guardados</h2>
+    <div id="stored-cvs"></div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.worker.min.js';
+
+    const fileInput = document.getElementById('file-input');
+    const defaultNamesInput = document.getElementById('default-names');
+    const goodWordsInput = document.getElementById('good-words');
+    const badWordsInput = document.getElementById('bad-words');
+    const resultsDiv = document.getElementById('results');
+    const storedCVsDiv = document.getElementById('stored-cvs');
+    const progressBar = document.querySelector('.progress-bar-fill');
+    const saveConfigButton = document.getElementById('save-config');
+
+    // Nombres por defecto
+    const defaultNames = ['Juan Pérez', 'María García', 'Carlos López'];
+
+    // Palabras buenas por defecto
+    const defaultGoodWords = ['excelente', 'bueno', 'recomendado', 'aprobado'];
+
+    // Cargar configuración guardada o usar valores por defecto
+    function loadConfig() {
+      const savedDefaultNames = localStorage.getItem('defaultNames');
+      const savedGoodWords = localStorage.getItem('goodWords');
+      const savedBadWords = localStorage.getItem('badWords');
+
+      defaultNamesInput.value = savedDefaultNames || defaultNames.join('\n');
+      goodWordsInput.value = savedGoodWords || defaultGoodWords.join('\n');
+      badWordsInput.value = savedBadWords || '';
+    }
+
+    // Guardar configuración
+    function saveConfig() {
+      localStorage.setItem('defaultNames', defaultNamesInput.value);
+      localStorage.setItem('goodWords', goodWordsInput.value);
+      localStorage.setItem('badWords', badWordsInput.value);
+      alert('Configuración guardada correctamente.');
+    }
+
+    // Cargar configuración al iniciar
+    loadConfig();
+
+    fileInput.addEventListener('change', processFiles);
+    saveConfigButton.addEventListener('click', saveConfig);
+
+    async function processFiles() {
+      if (!fileInput.files.length) {
+        return;
+      }
+
+      resultsDiv.innerHTML = '<h2>Resultados:</h2>';
+      const names = defaultNamesInput.value.split('\n').filter(name => name.trim() !== '');
+      const goodWords = goodWordsInput.value.split('\n').filter(word => word.trim() !== '');
+      const badWords = badWordsInput.value.split('\n').filter(word => word.trim() !== '');
+      const files = Array.from(fileInput.files);
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        updateProgress((i / files.length) * 100);
+        await searchAndClassifyPDF(file, names, goodWords, badWords);
+      }
+
+      updateProgress(100);
+      loadStoredCVs();
+    }
+
+    async function searchAndClassifyPDF(file, names, goodWords, badWords) {
+      const reader = new FileReader();
+      reader.onload = async function(event) {
+        const typedarray = new Uint8Array(event.target.result);
+        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+        
+        let fileResults = document.createElement('div');
+        fileResults.innerHTML = `<h3>${file.name}</h3>`;
+        
+        let nameFound = false;
+        let goodWordFound = false;
+        let badWordFound = false;
+        let classification = 'No determinado';
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const text = textContent.items.map(item => item.str).join(' ');
+          
+          // Check for names
+          for (const name of names) {
+            const nameRegex = new RegExp(name, 'gi');
+            if (nameRegex.test(text)) {
+              nameFound = true;
+              displayResults(fileResults, name, [{page: i, count: (text.match(nameRegex) || []).length}]);
+            }
+          }
+          
+          // Check for good words
+          for (const word of goodWords) {
+            const goodRegex = new RegExp(word, 'gi');
+            if (goodRegex.test(text)) {
+              goodWordFound = true;
+            }
+          }
+          
+          // Check for bad words
+          for (const word of badWords) {
+            const badRegex = new RegExp(word, 'gi');
+            if (badRegex.test(text)) {
+              badWordFound = true;
+            }
+          }
+        }
+        
+        // Determine classification
+        if (nameFound && goodWordFound && !badWordFound) {
+          classification = 'BUENO';
+          fileResults.innerHTML += '<p class="good">Clasificación: BUENO</p>';
+        } else if (badWordFound) {
+          classification = 'MALO';
+          fileResults.innerHTML += '<p class="bad">Clasificación: MALO</p>';
+        } else {
+          classification = 'REVISAR';
+          fileResults.innerHTML += '<p class="revisado">Clasificación: REVISAR</p>';
+        }
+        
+        resultsDiv.appendChild(fileResults);
+
+        // Store CV immediately after analysis
+        await storeCV(file, classification);
+        
+        // Refresh the stored CVs display
+        loadStoredCVs();
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function displayResults(container, name, results) {
+      if (results.length === 0) {
+        container.innerHTML += `<p>No se encontraron resultados para "${name}".</p>`;
+      } else {
+        const totalMatches = results.reduce((sum, result) => sum + result.count, 0);
+        container.innerHTML += `<p><strong>${name}</strong>: ${totalMatches} coincidencias en ${results.length} páginas:</p>`;
+        
+        const ul = document.createElement('ul');
+        results.forEach(result => {
+          const li = document.createElement('li');
+          li.innerHTML = `Página ${result.page}: ${result.count} ${result.count === 1 ? 'coincidencia' : 'coincidencias'}`;
+          ul.appendChild(li);
+        });
+        container.appendChild(ul);
+      }
+    }
+
+    function updateProgress(percentage) {
+      progressBar.style.width = `${percentage}%`;
+    }
+
+    async function storeCV(file, classification) {
+      const cvData = {
+        name: file.name,
+        classification: classification,
+        date: new Date().toLocaleString(),
+        file: await file.arrayBuffer()
+      };
+      
+      await localforage.setItem(file.name, cvData);
+    }
+
+    async function loadStoredCVs() {
+      storedCVsDiv.innerHTML = '';
+      await localforage.iterate((value, key) => {
+        const cvItem = document.createElement('div');
+        cvItem.className = 'cv-item';
+        cvItem.innerHTML = `
+          <div>
+            <strong>${value.name}</strong> - 
+            Clasificación: <span class="${value.classification.toLowerCase()}">${value.classification}</span><br>
+            Fecha: ${value.date}
+          </div>
+          <div>
+            <button onclick="viewCV('${key}')">Ver</button>
+            <button class="delete" onclick="deleteCV('${key}')">Eliminar</button>
+            ${value.classification === 'REVISAR' ? `<button class="edit" onclick="editClassification('${key}')">Editar a Revisado</button>` : ''}
+          </div>
+        `;
+        storedCVsDiv.appendChild(cvItem);
+      });
+    }
+
+    async function viewCV(key) {
+      const cvData = await localforage.getItem(key);
+      const blob = new Blob([cvData.file], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    }
+
+    async function deleteCV(key) {
+      if (confirm('¿Está seguro de que desea eliminar este CV?')) {
+        await localforage.removeItem(key);
+        loadStoredCVs();
+      }
+    }
+
+    async function editClassification(key) {
+      const cvData = await localforage.getItem(key);
+      cvData.classification = 'REVISADO';
+      await localforage.setItem(key, cvData);
+      loadStoredCVs();
+    }
+
+    // Cargar CVs guardados al iniciar
+    loadStoredCVs();
+  </script>
+</body>
+</html>
